@@ -19,6 +19,7 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
@@ -59,6 +60,7 @@ import com.starrocks.common.util.DateUtils;
 import com.starrocks.common.util.PropertyAnalyzer;
 import com.starrocks.common.util.TimeUtils;
 import com.starrocks.connector.iceberg.IcebergPartitionTransform;
+import com.starrocks.connector.iceberg.IcebergPartitionUtils;
 import com.starrocks.mv.analyzer.MVPartitionSlotRefResolver;
 import com.starrocks.planner.SlotDescriptor;
 import com.starrocks.planner.SlotId;
@@ -272,10 +274,17 @@ public class MaterializedViewAnalyzer {
             }
 
             if (!allowIcebergPartitionEvolution && table instanceof IcebergTable) {
-                IcebergTable icebergTable = (IcebergTable) table;
-                if (icebergTable.getNativeTable().specs().size() > 1) {
-                    throw new SemanticException("Do not support create materialized view when base iceberg table " +
-                            table.getName() + " has done partition evolution", tableName.getPos());
+                org.apache.iceberg.Table nativeTable = ((IcebergTable) table).getNativeTable();
+                if (nativeTable.specs().size() > 1) {
+                    // The MV's partition columns are checked against the specs later, once they are resolved,
+                    // in checkPartitionColumnWithBaseIcebergTable.
+                    Optional<String> incompatible = IcebergPartitionUtils.checkPartitionEvolutionCompatible(
+                            nativeTable, ImmutableList.of());
+                    if (incompatible.isPresent()) {
+                        throw new SemanticException("Do not support create materialized view when base iceberg table " +
+                                table.getName() + " has done partition evolution: " + incompatible.get(),
+                                tableName.getPos());
+                    }
                 }
             }
             if (!FeConstants.isReplayFromQueryDump && !isSupportedExternalTables(table)) {
@@ -1469,10 +1478,6 @@ public class MaterializedViewAnalyzer {
                 throw new SemanticException("Materialized view partition column in partition exp " +
                         "must be base table partition column");
             } else {
-                if (icebergTable.specs().size() > 1) {
-                    throw new SemanticException("Do not support create materialized view when " +
-                            "base iceberg table has partition evolution");
-                }
                 boolean found = false;
                 for (PartitionField partitionField : partitionSpec.fields()) {
                     IcebergPartitionTransform transform =
@@ -1514,6 +1519,14 @@ public class MaterializedViewAnalyzer {
                 if (!found) {
                     throw new SemanticException("Materialized view partition column in partition exp " +
                             "must be base table partition column");
+                }
+                if (icebergTable.specs().size() > 1) {
+                    Optional<String> incompatible = IcebergPartitionUtils.checkPartitionEvolutionCompatible(
+                            icebergTable, ImmutableList.of(slotRef.getColumnName()));
+                    if (incompatible.isPresent()) {
+                        throw new SemanticException("Do not support create materialized view when base iceberg table " +
+                                table.getName() + " has done partition evolution: " + incompatible.get());
+                    }
                 }
             }
         }

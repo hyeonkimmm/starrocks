@@ -545,4 +545,25 @@ public class MaterializedViewAnalyzerTest {
                 "SELECT id, data, date FROM `iceberg0`.`view_db`.`iceberg_view` as a;";
         analyzeFail(sql, "Create/Rebuild materialized view do not support the table type: ICEBERG_VIEW");
     }
+
+    @Test
+    public void testCreateMvOnIcebergTableWithPrefixPartitionEvolution() {
+        // spec 0 = (id), spec 1 = (id, data): partitioning the MV by id is safe, by data is not.
+        analyzeSuccess("create materialized view mv_iceberg_evolution_ok partition by id " +
+                "distributed by hash(id) buckets 3 refresh manual as " +
+                "SELECT id, data, ts FROM `iceberg0`.`partitioned_transforms_db`.`t0_evolution_append` as a;");
+        analyzeFail("create materialized view mv_iceberg_evolution_bad partition by data " +
+                "distributed by hash(id) buckets 3 refresh manual as " +
+                "SELECT id, data, ts FROM `iceberg0`.`partitioned_transforms_db`.`t0_evolution_append` as a;",
+                "t0_evolution_append has done partition evolution");
+        // ts is not a partition field at all, which is unrelated to the evolution
+        analyzeFail("create materialized view mv_iceberg_evolution_not_partition_col " +
+                "partition by date_trunc('day', ts) distributed by hash(id) buckets 3 refresh manual as " +
+                "SELECT id, data, ts FROM `iceberg0`.`partitioned_transforms_db`.`t0_evolution_append` as a;",
+                "must be base table partition column");
+        // unpartitioned MVs never depended on the partition mapping
+        analyzeSuccess("create materialized view mv_iceberg_evolution_unpart " +
+                "distributed by hash(id) buckets 3 refresh manual as " +
+                "SELECT id, data, ts FROM `iceberg0`.`partitioned_transforms_db`.`t0_evolution_append` as a;");
+    }
 }
